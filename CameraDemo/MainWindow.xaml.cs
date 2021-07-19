@@ -17,6 +17,8 @@ namespace CameraDemo
         private IntPtr renderer = IntPtr.Zero;
         private IntPtr texture = IntPtr.Zero;
         private SDL.SDL_Rect rect;
+        int width = 640;
+        int height = 480;
         public MainWindow()
         {
             InitializeComponent();
@@ -34,10 +36,34 @@ namespace CameraDemo
                 captureFrame("rtmp://192.168.100.27:1935/live/device_cxj_test", "USB Camera");
             }).Start();
         }
+
+        private void WFH_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (renderer != IntPtr.Zero && window != IntPtr.Zero)
+            {
+                int viewW = (int)WFH.ActualWidth;
+                int viewH = (int)WFH.ActualHeight;
+                SDL.SDL_GetWindowSize(window, out int w, out int h);
+                if (viewH > viewW)
+                {
+                    int newWidth = viewW;
+                    int newHeight = height * newWidth / width;
+                    SDL.SDL_SetWindowSize(window, newWidth, newHeight);
+                    rect = new SDL.SDL_Rect() { x = 0, y = 0, w = newWidth, h = newHeight };
+                }
+                else
+                {
+                    int newHeight = viewH;
+                    int newWidth = width * newHeight / height;
+                    SDL.SDL_SetWindowSize(window, newWidth, newHeight);
+                    rect = new SDL.SDL_Rect() { x = 0, y = 0, w = newWidth, h = newHeight };
+                }
+            }
+        }
+        
         void captureFrame(string url,string cameraName)
         {
-            int width = 1280;
-            int height = 720;
+            
             _ = ffmpeg.avformat_network_init();
             ffmpeg.avdevice_register_all();
             AVInputFormat* ifmt = ffmpeg.av_find_input_format("dshow");
@@ -80,9 +106,10 @@ namespace CameraDemo
 
             in_stream = ffmpeg.avformat_new_stream(ifmt_ctx, in_codec);
             in_codec_ctx = ffmpeg.avcodec_alloc_context3(in_codec);
-            AVDictionary* codec_options = null;
+            AVDictionary* codec_options = null;           
             _ = ffmpeg.av_dict_set(&codec_options, "framerate", "30", 0);
-            _ = ffmpeg.av_dict_set(&codec_options, "preset", "superfast", 0);
+            _ = ffmpeg.av_dict_set(&codec_options, "preset", "ultrafast", 0);
+            _ = ffmpeg.av_dict_set(&codec_options, "tune", "zerolatency", 0);
             _ = ffmpeg.avcodec_parameters_to_context(in_codec_ctx, ifmt_ctx->streams[stream_index]->codecpar);
 
             if (ffmpeg.avcodec_open2(in_codec_ctx, in_codec, &codec_options) != 0)
@@ -112,16 +139,10 @@ namespace CameraDemo
             out_codec_ctx->codec_type = AVMediaType.AVMEDIA_TYPE_VIDEO;
             out_codec_ctx->width = width;
             out_codec_ctx->height = height;
-            out_codec_ctx->gop_size = 12;
+            out_codec_ctx->gop_size = 1;
             out_codec_ctx->pix_fmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
             out_codec_ctx->framerate = dst_fps;
             out_codec_ctx->time_base = ffmpeg.av_inv_q(dst_fps);
-
-            //if (ofmt_ctx->oformat->flags & ffmpeg.AVFMT_GLOBALHEADER)
-            //{
-            //    out_codec_ctx->flags |= ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
-            //}
-
             if (ffmpeg.avcodec_parameters_from_context(out_stream->codecpar, out_codec_ctx) != 0)
             {
                 Debug.WriteLine("could not initialize stream codec parameters!\n");
@@ -129,10 +150,10 @@ namespace CameraDemo
             }
 
             AVDictionary* _codec_options = null;
-            _ = ffmpeg.av_dict_set(&_codec_options, "profile", "high", 0);
-            _ = ffmpeg.av_dict_set(&_codec_options, "preset", "superfast", 0);
+            _ = ffmpeg.av_dict_set(&_codec_options, "profile", "baseline", 0);
+            _ = ffmpeg.av_dict_set(&_codec_options, "preset", "ultrafast", 0);
             _ = ffmpeg.av_dict_set(&_codec_options, "tune", "zerolatency", 0);
-
+            _ = ffmpeg.av_dict_set(&codec_options, "framerate", "30", 0);
             if (ffmpeg.avcodec_open2(out_codec_ctx, out_codec, &codec_options) != 0)
             {
                 Debug.WriteLine("could not open video encoder!\n");
@@ -165,6 +186,7 @@ namespace CameraDemo
             long pts = 0;
             int ret;
             int y_size = out_codec_ctx->width * out_codec_ctx->height;
+           
             while (true)
             {
                 if (ffmpeg.av_read_frame(ifmt_ctx, pkt) < 0)
@@ -200,20 +222,15 @@ namespace CameraDemo
                 outframe->linesize[2] = dstLinesize[2];
                 outframe->pts = pts++;
 
+               
                 if (texture == IntPtr.Zero || renderer == IntPtr.Zero)
                 {
                     renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RendererFlags.SDL_RENDERER_ACCELERATED);
                     texture = SDL.SDL_CreateTexture(renderer, SDL.SDL_PIXELFORMAT_IYUV, (int)SDL.SDL_TextureAccess.SDL_TEXTUREACCESS_STREAMING, width, height);
                     rect = new SDL.SDL_Rect() { x = 0, y = 0, w = width, h = height };
                     SDL.SDL_SetWindowSize(window, width, height);
-                }
-                SDL.SDL_GetWindowSize(window, out int w, out int h);
-                if (w != width || h != height)
-                {
-                    texture = SDL.SDL_CreateTexture(renderer, SDL.SDL_PIXELFORMAT_IYUV, 1, width, height);
-                    rect = new SDL.SDL_Rect() { x = 0, y = 0, w = width, h = height };
-                    SDL.SDL_SetWindowSize(window, width, height);
-                }
+                    _ = SDL.SDL_RenderSetLogicalSize(renderer, width, height);
+                }               
                 int yPitch = dstLinesize[0];
                 int uPitch = dstLinesize[1];
                 int vPitch = dstLinesize[2];
@@ -223,6 +240,13 @@ namespace CameraDemo
                 ret = SDL.SDL_UpdateYUVTexture(texture, ref rect, y, yPitch, u, uPitch, v, vPitch);
                 _ = SDL.SDL_RenderCopy(renderer, texture, IntPtr.Zero, ref rect);
                 SDL.SDL_RenderPresent(renderer);
+                
+               
+
+                if (outframe->pict_type == AVPictureType.AV_PICTURE_TYPE_B)
+                {
+                    continue;
+                }
                 if (ffmpeg.avcodec_send_frame(out_codec_ctx, outframe) != 0)
                 {
                     Debug.WriteLine("error sending frame to output codec context!\n");
@@ -231,13 +255,13 @@ namespace CameraDemo
 
                 if (ffmpeg.avcodec_receive_packet(out_codec_ctx, pkt) != 0)
                 {
+                   
                     Debug.WriteLine("error receiving packet from output codec context!\n");
                 }
                 else
                 {
                     pkt->pts = ffmpeg.av_rescale_q(pkt->pts, out_codec_ctx->time_base, out_stream->time_base);
                     pkt->dts = ffmpeg.av_rescale_q(pkt->dts, out_codec_ctx->time_base, out_stream->time_base);
-
                     _ = ffmpeg.av_interleaved_write_frame(ofmt_ctx, pkt);
                     ffmpeg.av_packet_unref(pkt);
                     _ = ffmpeg.av_new_packet(pkt, 0);
